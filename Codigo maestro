@@ -1,0 +1,58 @@
+#Definición de Pines
+const uint8_t PIN_LED_TIMER = 9; // PWM (Temporizador Verde)
+const uint8_t PIN_SOFT_RX   = 10;
+const uint8_t PIN_SOFT_TX   = 11;
+const uint8_t PIN_UNUSED_ADC = A5; // Pin analógico flotante para la semilla aleatoria
+
+#Constantes del Juego
+const unsigned long GAME_DURATION_MS = 60000; // 60 segundos
+const unsigned long VICTORY_HOLD_MS   = 2000;  // 2 segundos de permanencia contínua
+const unsigned long TX_INTERVAL_MS   = 40;
+const unsigned long TIMEOUT_MS       = 2000;
+
+#Máquina de Estados del Maestro
+enum State {
+  STATE_INACTIVO,
+  STATE_JUGANDO,
+  STATE_VICTORIA,
+  STATE_DERROTA
+};
+
+State currentState = STATE_INACTIVO;
+
+SoftwareSerial linkSerial(PIN_SOFT_RX, PIN_SOFT_TX);
+
+#Posición y Distancias del Tesoro
+uint8_t tx = 0, ty = 0; // Coordenadas de esquina del tesoro 2x2
+uint8_t posX = 0, posY = 0;
+uint8_t levelX = 0, levelY = 0;
+
+#Temporizadores y Banderas
+unsigned long gameStartTime    = 0;
+unsigned long victoryStartTime = 0;
+unsigned long lastTxTime       = 0;
+unsigned long lastRxTime       = 0;
+unsigned long animTimer        = 0;
+uint8_t animStep               = 0;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
