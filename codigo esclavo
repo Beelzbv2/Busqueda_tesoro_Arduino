@@ -1,0 +1,176 @@
+#Definición de Pines
+const uint8_t PIN_POT_X      = A0;
+const uint8_t PIN_POT_Y      = A1;
+const uint8_t PIN_BTN_START  = 2;
+const uint8_t PIN_LED_X      = 3; // PWM
+const uint8_t PIN_LED_Y      = 5; // PWM
+const uint8_t PIN_SOFT_RX    = 10;
+const uint8_t PIN_SOFT_TX    = 11;
+
+#Constantes de Configuración y PWM Referenciales
+const uint8_t PWM_LEVELS[4]  = {0, 20, 80, 255}; // FRÍO, TIBIO, CALIENTE, AQUÍ
+const unsigned long TX_INTERVAL_MS = 40;
+const unsigned long TIMEOUT_MS     = 2000;
+const unsigned long DEBOUNCE_MS    = 40;
+
+#Códigos de Protocolo (Maestro -> Esclavo)
+const uint8_t CMD_STATE_INACTIVO = 0xE0;
+const uint8_t CMD_STATE_JUGANDO  = 0xE1;
+const uint8_t CMD_STATE_VICTORIA = 0xE2;
+const uint8_t CMD_STATE_DERROTA  = 0xE3;
+
+SoftwareSerial linkSerial(PIN_SOFT_RX, PIN_SOFT_TX);
+
+#Variables de Estado Interno
+uint8_t currentLevelX = 0;
+uint8_t currentLevelY = 0;
+uint8_t gameState     = CMD_STATE_INACTIVO;
+
+#Temporizadores no bloqueantes
+unsigned long lastTxTime    = 0;
+unsigned long lastRxTime    = 0;
+unsigned long lastDebounce  = 0;
+unsigned long animTimer     = 0;
+
+#Variables de Botón
+bool lastBtnState = HIGH;
+bool btnState     = HIGH;
+
+#Variables de Animación de Pérdida de Enlace y Victoria
+bool linkLost          = false;
+uint8_t animStep       = 0;
+bool isAnimatingEnd    = false;
+
+uint8_t readADCUniform(uint8_t pin) {
+  analogRead(pin);
+  uint32_t sum = 0;
+  for (uint8_t i = 0; i < 4; i++) {
+    sum += analogRead(pin);
+  }
+  uint32_t avg = sum / 4;
+  
+#Conversión uniforme a rango [0, 100]
+  uint32_t coord = (avg * 100L) / 1024L;
+  if (coord > 100) coord = 100;
+  return (uint8_t)coord;
+}
+
+void processIncomingByte(uint8_t b) {
+  lastRxTime = millis();
+  linkLost = false;
+
+  if (b >= 0x10 && b <= 0x13) {
+    currentLevelX = b - 0x10;
+  } else if (b >= 0x20 && b <= 0x23) {
+    currentLevelY = b - 0x20;
+  } else if (b >= 0xE0 && b <= 0xE3) {
+    if (gameState != b) {
+      gameState = b;
+      if (gameState == CMD_STATE_VICTORIA) {
+        isAnimatingEnd = true;
+        animStep = 0;
+        animTimer = millis();
+      } else if (gameState == CMD_STATE_DERROTA) {
+        isAnimatingEnd = false;
+        analogWrite(PIN_LED_X, 0);
+        analogWrite(PIN_LED_Y, 0);
+      }
+    }
+  }
+}
+
+void readSerialData() {
+  while (linkSerial.available() > 0) {
+    uint8_t b = linkSerial.read();
+    processIncomingByte(b);
+  }
+}
+
+void checkButton() {
+  bool reading = digitalRead(PIN_BTN_START);
+  if (reading != lastBtnState) {
+    lastDebounce = millis();
+  }
+  
+  if ((millis() - lastDebounce) > DEBOUNCE_MS) {
+    if (reading != btnState) {
+      btnState = reading;
+      // Detección de flanco de bajada (pulsación en INPUT_PULLUP)
+      if (btnState == LOW) {
+        linkSerial.write((uint8_t)0xFE); // Enviar solicitud de inicio
+      }
+    }
+  }
+  lastBtnState = reading;
+}
+
+void updateOutputs() {
+  unsigned long now = millis();
+
+#Verificar Timeout de enlace > 2000 ms
+  if (now - lastRxTime > TIMEOUT_MS) {
+    linkLost = true;
+  }
+
+  if (linkLost) {
+    if ((now / 500) % 2 == 0) {
+      analogWrite(PIN_LED_X, 255);
+      analogWrite(PIN_LED_Y, 0);
+    } else {
+      analogWrite(PIN_LED_X, 0);
+      analogWrite(PIN_LED_Y, 255);
+    }
+    return;
+  }
+
+#Animación de Victoria
+  if (gameState == CMD_STATE_VICTORIA && isAnimatingEnd) {
+    if (now - animTimer >= 250) {
+      animTimer = now;
+      animStep++;
+      if (animStep >= 20) {
+        isAnimatingEnd = false;
+      }
+    }
+    bool ledOn = (animStep % 2 == 0);
+    analogWrite(PIN_LED_X, ledOn ? 255 : 0);
+    analogWrite(PIN_LED_Y, ledOn ? 255 : 0);
+    return;
+  }
+
+#Comportamiento Normal durante JUGANDO o INACTIVO
+  if (gameState == CMD_STATE_INACTIVO || gameState == CMD_STATE_DERROTA) {
+    analogWrite(PIN_LED_X, 0);
+    analogWrite(PIN_LED_Y, 0);
+  } else if (gameState == CMD_STATE_JUGANDO) {
+    analogWrite(PIN_LED_X, PWM_LEVELS[currentLevelX]);
+    analogWrite(PIN_LED_Y, PWM_LEVELS[currentLevelY]);
+  }
+}
+
+void setup() {
+  pinMode(PIN_BTN_START, INPUT_PULLUP);
+  pinMode(PIN_LED_X, OUTPUT);
+  pinMode(PIN_LED_Y, OUTPUT);
+
+  linkSerial.begin(9600);
+  lastRxTime = millis();
+}
+
+void loop() {
+  readSerialData();
+  checkButton();
+
+#Transmisión periódica de coordenadas (cada 40 ms)
+  unsigned long now = millis();
+  if (now - lastTxTime >= TX_INTERVAL_MS) {
+    lastTxTime = now;
+    uint8_t posX = readADCUniform(PIN_POT_X);
+    uint8_t posY = readADCUniform(PIN_POT_Y);
+
+    linkSerial.write(posX);          // 0 .. 100
+    linkSerial.write(posY + 101);    // 101 .. 201
+  }
+
+  updateOutputs();
+}
