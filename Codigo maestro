@@ -94,7 +94,118 @@ void readSerialData() {
 void updateGameLogic() {
   unsigned long now = millis();
 
+#Control del Timeout de enlace
+  if (now - lastRxTime > TIMEOUT_MS) {
+    if (!linkLost) {
+      linkLost = true;
+      currentState = STATE_INACTIVO; #Abortar partida si se pierde la comunicación
+    }
+  }
 
+  if (linkLost) {
+#Parpadeo rápido del LED verde (250 ms)
+    bool blink = (now / 250) % 2 == 0;
+    analogWrite(PIN_LED_TIMER, blink ? 255 : 0);
+    return;
+  }
+
+  switch (currentState) {
+    case STATE_INACTIVO:
+      analogWrite(PIN_LED_TIMER, 0);
+      break;
+
+    case STATE_JUGANDO: {
+      unsigned long elapsed = now - gameStartTime;
+
+      #Verificación de expiración de tiempo (Derrota)
+      if (elapsed >= GAME_DURATION_MS) {
+        currentState = STATE_DERROTA;
+        animStep = 0;
+        animTimer = now;
+        break;
+      }
+
+     #Cálculo atenuado del LED verde del tiempo (100% -> 0%)
+      unsigned long remaining = GAME_DURATION_MS - elapsed;
+      uint8_t timerPwm = (remaining * 255L) / GAME_DURATION_MS;
+      analogWrite(PIN_LED_TIMER, timerPwm);
+
+      #Cálculo de distancias y niveles
+      uint8_t dx = calculateAxisDistance(posX, tx);
+      uint8_t dy = calculateAxisDistance(posY, ty);
+
+      levelX = getProximityLevel(dx);
+      levelY = getProximityLevel(dy);
+
+     #Verificación de Condición de Victoria (Permanencia contínua de 2000 ms)
+      if (dx == 0 && dy == 0) {
+        if (victoryStartTime == 0) {
+          victoryStartTime = now;
+        } else if (now - victoryStartTime >= VICTORY_HOLD_MS) {
+          currentState = STATE_VICTORIA;
+          animStep = 0;
+          animTimer = now;
+        }
+      } else {
+        victoryStartTime = 0; #Reiniciar si el jugador sale del área
+      }
+      break;
+    }
+
+    case STATE_VICTORIA:
+     #LED Verde fijo al 100%
+      analogWrite(PIN_LED_TIMER, 255);
+      if (now - animTimer >= 250) {
+        animTimer = now;
+        animStep++;
+        if (animStep >= 20) { #Duración de la animación en Esclavo
+          currentState = STATE_INACTIVO;
+        }
+      }
+      break;
+
+    case STATE_DERROTA:
+      #LED Verde parpadea 10 veces (250 ms ON / 250 ms OFF)
+      if (now - animTimer >= 250) {
+        animTimer = now;
+        animStep++;
+        if (animStep >= 20) {
+          currentState = STATE_INACTIVO;
+        }
+      }
+      analogWrite(PIN_LED_TIMER, (animStep % 2 == 0) ? 255 : 0);
+      break;
+  }
+}
+
+void sendStateAndLevels() {
+  uint8_t stateByte = 0xE0;
+  if (currentState == STATE_JUGANDO)  stateByte = 0xE1;
+  if (currentState == STATE_VICTORIA) stateByte = 0xE2;
+  if (currentState == STATE_DERROTA)  stateByte = 0xE3;
+
+  linkSerial.write(stateByte);
+  linkSerial.write(0x10 + levelX);
+  linkSerial.write(0x20 + levelY);
+}
+
+void setup() {
+  pinMode(PIN_LED_TIMER, OUTPUT);
+  linkSerial.begin(9600);
+  lastRxTime = millis();
+}
+
+void loop() {
+  readSerialData();
+  updateGameLogic();
+
+ #Envío periódico al Esclavo
+  unsigned long now = millis();
+  if (now - lastTxTime >= TX_INTERVAL_MS) {
+    lastTxTime = now;
+    sendStateAndLevels();
+  }
+}
 
 
 
