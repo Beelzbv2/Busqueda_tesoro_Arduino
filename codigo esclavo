@@ -1,3 +1,4 @@
+#include <SoftwareSerial.h>
 #Definición de Pines
 const uint8_t PIN_POT_X      = A0;
 const uint8_t PIN_POT_Y      = A1;
