@@ -35,6 +35,64 @@ unsigned long lastRxTime       = 0;
 unsigned long animTimer        = 0;
 uint8_t animStep               = 0;
 
+bool linkLost = false;
+
+#Función para calcular distancia discreta a un tesoro 2x2 {tx-1, tx}
+uint8_t calculateAxisDistance(uint8_t pos, uint8_t t) {
+  if (pos < (t - 1)) {
+    return (t - 1) - pos;
+  } else if (pos > t) {
+    return pos - t;
+  } else {
+    return 0; // Dentro del tesoro
+  }
+}
+
+#Convertir distancia en Nivel de Proximidad (0 a 3)
+uint8_t getProximityLevel(uint8_t d) {
+  if (d == 0)      return 3; // AQUÍ
+  if (d <= 5)      return 2; // CALIENTE
+  if (d <= 10)     return 1; // TIBIO
+  return 0;                  // FRÍO (d > 10)
+}
+
+void startNewGame() {
+  #Semilla Aleatoria
+  randomSeed(analogRead(PIN_UNUSED_ADC));
+  
+  #Coordenadas aleatorias
+  tx = random(12, 101);
+  ty = random(12, 101);
+
+  gameStartTime = millis();
+  victoryStartTime = 0;
+  currentState = STATE_JUGANDO;
+}
+
+void processIncomingByte(uint8_t b) {
+  lastRxTime = millis();
+  linkLost = false;
+
+  if (b <= 100) {
+    posX = b;
+  } else if (b >= 101 && b <= 201) {
+    posY = b - 101;
+  } else if (b == 0xFE) {
+    if (currentState == STATE_INACTIVO) {
+      startNewGame();
+    }
+  }
+}
+
+void readSerialData() {
+  while (linkSerial.available() > 0) {
+    uint8_t b = linkSerial.read();
+    processIncomingByte(b);
+  }
+}
+
+void updateGameLogic() {
+  unsigned long now = millis();
 
 
 
