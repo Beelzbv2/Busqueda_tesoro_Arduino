@@ -1,21 +1,23 @@
 #include <SoftwareSerial.h>
 
-// Definición de Pines
+// ==========================================
+// DEFINICIÓN DE PINES Y CONSTANTES
+// ==========================================
 const uint8_t PIN_POT_X      = A0;
 const uint8_t PIN_POT_Y      = A1;
-const uint8_t PIN_BTN_START  = 2;
-const uint8_t PIN_LED_X      = 3; // PWM
-const uint8_t PIN_LED_Y      = 5; // PWM
-const uint8_t PIN_SOFT_RX    = 10;
-const uint8_t PIN_SOFT_TX    = 11;
+const uint8_t PIN_BTN_START  = 2;  // Conectado con INPUT_PULLUP (a GND)
+const uint8_t PIN_LED_X      = 3;  // Salida PWM
+const uint8_t PIN_LED_Y      = 5;  // Salida PWM
+const uint8_t PIN_SOFT_RX    = 10; // Conectar al TX del Maestro (Pin 11)
+const uint8_t PIN_SOFT_TX    = 11; // Conectar al RX del Maestro (Pin 10)
 
-// Constantes de Configuración y PWM Referenciales
-const uint8_t PWM_LEVELS[4]  = {0, 20, 80, 255}; // FRÍO, TIBIO, CALIENTE, AQUÍ
-const unsigned long TX_INTERVAL_MS = 40;
-const unsigned long TIMEOUT_MS     = 2000;
-const unsigned long DEBOUNCE_MS    = 40;
+// Niveles PWM referenciales: [0] FRÍO, [1] TIBIO, [2] CALIENTE, [3] AQUÍ
+const uint8_t PWM_LEVELS[4]  = {0, 20, 80, 255};
+const unsigned long TX_INTERVAL_MS = 40;   // Envío de coordenadas cada 40 ms
+const unsigned long TIMEOUT_MS     = 2000; // Timeout por pérdida de enlace
+const unsigned long DEBOUNCE_MS    = 40;   // Antirrebote del botón
 
-// Códigos de Protocolo (Maestro -> Esclavo)
+// Códigos del Protocolo Serial (Maestro -> Esclavo)
 const uint8_t CMD_STATE_INACTIVO = 0xE0;
 const uint8_t CMD_STATE_JUGANDO  = 0xE1;
 const uint8_t CMD_STATE_VICTORIA = 0xE2;
@@ -23,40 +25,44 @@ const uint8_t CMD_STATE_DERROTA  = 0xE3;
 
 SoftwareSerial linkSerial(PIN_SOFT_RX, PIN_SOFT_TX);
 
-// Variables de Estado Interno
+// ==========================================
+// VARIABLES DE ESTADO INTERNO
+// ==========================================
 uint8_t currentLevelX = 0;
 uint8_t currentLevelY = 0;
 uint8_t gameState     = CMD_STATE_INACTIVO;
 
-// Temporizadores no bloqueantes
 unsigned long lastTxTime    = 0;
 unsigned long lastRxTime    = 0;
 unsigned long lastDebounce  = 0;
 unsigned long animTimer     = 0;
 
-// Variables de Botón
-bool lastBtnState = HIGH;
-bool btnState     = HIGH;
+bool lastBtnState   = HIGH;
+bool btnState       = HIGH;
+bool linkLost       = false;
+bool isAnimatingEnd = false;
+uint8_t animStep    = 0;
 
-// Variables de Animación de Pérdida de Enlace y Victoria
-bool linkLost          = false;
-uint8_t animStep       = 0;
-bool isAnimatingEnd    = false;
-
+// ==========================================
+// LECTURA ADC UNIFORME Y FILTRADO
+// ==========================================
 uint8_t readADCUniform(uint8_t pin) {
-  analogRead(pin); // Estabilización del multiplexor ADC
+  analogRead(pin); // Lectura de estabilización del multiplexor ADC
+  
   uint32_t sum = 0;
   for (uint8_t i = 0; i < 4; i++) {
     sum += analogRead(pin);
   }
   uint32_t avg = sum / 4;
   
-  // Conversión uniforme a rango [0, 100]
+  // Conversión matemática uniforme al rango [0, 100]
   uint32_t coord = (avg * 100L) / 1024L;
-  if (coord > 100) coord = 100;
-  return (uint8_t)coord;
+  return (coord > 100) ? 100 : (uint8_t)coord;
 }
 
+// ==========================================
+// RECEPCIÓN Y PROTOCOLO BINARIO
+// ==========================================
 void processIncomingByte(uint8_t b) {
   lastRxTime = millis();
   linkLost = false;
@@ -74,8 +80,6 @@ void processIncomingByte(uint8_t b) {
         animTimer = millis();
       } else if (gameState == CMD_STATE_DERROTA) {
         isAnimatingEnd = false;
-        analogWrite(PIN_LED_X, 0);
-        analogWrite(PIN_LED_Y, 0);
       }
     }
   }
@@ -83,11 +87,13 @@ void processIncomingByte(uint8_t b) {
 
 void readSerialData() {
   while (linkSerial.available() > 0) {
-    uint8_t b = linkSerial.read();
-    processIncomingByte(b);
+    processIncomingByte(linkSerial.read());
   }
 }
 
+// ==========================================
+// BOTÓN DE INICIO CON ANTIRREBOTE
+// ==========================================
 void checkButton() {
   bool reading = digitalRead(PIN_BTN_START);
   if (reading != lastBtnState) {
@@ -97,42 +103,39 @@ void checkButton() {
   if ((millis() - lastDebounce) > DEBOUNCE_MS) {
     if (reading != btnState) {
       btnState = reading;
-      // Detección de flanco de bajada (pulsación en INPUT_PULLUP)
+      // Detección de flanco de bajada (al presionar en INPUT_PULLUP)
       if (btnState == LOW) {
-        linkSerial.write((uint8_t)0xFE); // Enviar solicitud de inicio
+        linkSerial.write((uint8_t)0xFE); // Solicitud de inicio de juego
       }
     }
   }
   lastBtnState = reading;
 }
 
+// ==========================================
+// CONTROL DE SALIDAS (LEDS Y ANIMACIONES)
+// ==========================================
 void updateOutputs() {
   unsigned long now = millis();
 
-  // Verificar Timeout de enlace > 2000 ms
+  // Control de pérdida de enlace (> 2000 ms)
   if (now - lastRxTime > TIMEOUT_MS) {
     linkLost = true;
   }
 
   if (linkLost) {
-    if ((now / 500) % 2 == 0) {
-      analogWrite(PIN_LED_X, 255);
-      analogWrite(PIN_LED_Y, 0);
-    } else {
-      analogWrite(PIN_LED_X, 0);
-      analogWrite(PIN_LED_Y, 255);
-    }
+    // Parpadeo alternado a 500 ms en LEDs X e Y
+    bool alt = ((now / 500) % 2 == 0);
+    analogWrite(PIN_LED_X, alt ? 255 : 0);
+    analogWrite(PIN_LED_Y, alt ? 0 : 255);
     return;
   }
 
-  // Animación de Victoria
+  // Animación de Victoria (10 parpadeos a 250 ms)
   if (gameState == CMD_STATE_VICTORIA && isAnimatingEnd) {
     if (now - animTimer >= 250) {
       animTimer = now;
-      animStep++;
-      if (animStep >= 20) {
-        isAnimatingEnd = false;
-      }
+      if (++animStep >= 20) isAnimatingEnd = false;
     }
     bool ledOn = (animStep % 2 == 0);
     analogWrite(PIN_LED_X, ledOn ? 255 : 0);
@@ -140,7 +143,7 @@ void updateOutputs() {
     return;
   }
 
-  // Comportamiento Normal durante JUGANDO o INACTIVO
+  // Comportamiento Normal del Juego
   if (gameState == CMD_STATE_INACTIVO || gameState == CMD_STATE_DERROTA) {
     analogWrite(PIN_LED_X, 0);
     analogWrite(PIN_LED_Y, 0);
@@ -150,6 +153,9 @@ void updateOutputs() {
   }
 }
 
+// ==========================================
+// SETUP & LOOP PRINCIPAL
+// ==========================================
 void setup() {
   pinMode(PIN_BTN_START, INPUT_PULLUP);
   pinMode(PIN_LED_X, OUTPUT);
@@ -163,15 +169,12 @@ void loop() {
   readSerialData();
   checkButton();
 
-  // Transmisión periódica de coordenadas (cada 40 ms)
+  // Envío periódico de coordenadas X e Y
   unsigned long now = millis();
   if (now - lastTxTime >= TX_INTERVAL_MS) {
     lastTxTime = now;
-    uint8_t posX = readADCUniform(PIN_POT_X);
-    uint8_t posY = readADCUniform(PIN_POT_Y);
-
-    linkSerial.write(posX);          // 0 .. 100
-    linkSerial.write(posY + 101);    // 101 .. 201
+    linkSerial.write(readADCUniform(PIN_POT_X));        // 0 .. 100
+    linkSerial.write(readADCUniform(PIN_POT_Y) + 101);  // 101 .. 201
   }
 
   updateOutputs();
