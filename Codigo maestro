@@ -1,16 +1,18 @@
-#Definición de Pines
-const uint8_t PIN_LED_TIMER = 9; // PWM (Temporizador Verde)
-const uint8_t PIN_SOFT_RX   = 10;
-const uint8_t PIN_SOFT_TX   = 11;
+#include <SoftwareSerial.h>
+
+// Definición de Pines
+const uint8_t PIN_LED_TIMER  = 9;  // LED Verde PWM
+const uint8_t PIN_SOFT_RX    = 10;
+const uint8_t PIN_SOFT_TX    = 11;
 const uint8_t PIN_UNUSED_ADC = A5; // Pin analógico flotante para la semilla aleatoria
 
-#Constantes del Juego
+// Constantes del Juego
 const unsigned long GAME_DURATION_MS = 60000; // 60 segundos
-const unsigned long VICTORY_HOLD_MS   = 2000;  // 2 segundos de permanencia contínua
+const unsigned long VICTORY_HOLD_MS   = 2000;  // 2 segundos de permanencia continua
 const unsigned long TX_INTERVAL_MS   = 40;
 const unsigned long TIMEOUT_MS       = 2000;
 
-#Máquina de Estados del Maestro
+// Máquina de Estados del Maestro
 enum State {
   STATE_INACTIVO,
   STATE_JUGANDO,
@@ -22,12 +24,12 @@ State currentState = STATE_INACTIVO;
 
 SoftwareSerial linkSerial(PIN_SOFT_RX, PIN_SOFT_TX);
 
-#Posición y Distancias del Tesoro
+// Posición y Distancias del Tesoro
 uint8_t tx = 0, ty = 0; // Coordenadas de esquina del tesoro 2x2
 uint8_t posX = 0, posY = 0;
 uint8_t levelX = 0, levelY = 0;
 
-#Temporizadores y Banderas
+// Temporizadores y Banderas
 unsigned long gameStartTime    = 0;
 unsigned long victoryStartTime = 0;
 unsigned long lastTxTime       = 0;
@@ -37,7 +39,7 @@ uint8_t animStep               = 0;
 
 bool linkLost = false;
 
-#Función para calcular distancia discreta a un tesoro 2x2 {tx-1, tx}
+// Función para calcular distancia discreta a un tesoro 2x2 {tx-1, tx}
 uint8_t calculateAxisDistance(uint8_t pos, uint8_t t) {
   if (pos < (t - 1)) {
     return (t - 1) - pos;
@@ -48,7 +50,7 @@ uint8_t calculateAxisDistance(uint8_t pos, uint8_t t) {
   }
 }
 
-#Convertir distancia en Nivel de Proximidad (0 a 3)
+// Convertir distancia en Nivel de Proximidad (0 a 3)
 uint8_t getProximityLevel(uint8_t d) {
   if (d == 0)      return 3; // AQUÍ
   if (d <= 5)      return 2; // CALIENTE
@@ -57,10 +59,10 @@ uint8_t getProximityLevel(uint8_t d) {
 }
 
 void startNewGame() {
-  #Semilla Aleatoria
+  // Semilla Aleatoria
   randomSeed(analogRead(PIN_UNUSED_ADC));
   
-  #Coordenadas aleatorias
+  // Coordenadas aleatorias
   tx = random(12, 101);
   ty = random(12, 101);
 
@@ -94,16 +96,16 @@ void readSerialData() {
 void updateGameLogic() {
   unsigned long now = millis();
 
-#Control del Timeout de enlace
+  // Control del Timeout de enlace
   if (now - lastRxTime > TIMEOUT_MS) {
     if (!linkLost) {
       linkLost = true;
-      currentState = STATE_INACTIVO; #Abortar partida si se pierde la comunicación
+      currentState = STATE_INACTIVO; // Abortar partida si se pierde la comunicación
     }
   }
 
   if (linkLost) {
-#Parpadeo rápido del LED verde (250 ms)
+    // Parpadeo rápido del LED verde (250 ms)
     bool blink = (now / 250) % 2 == 0;
     analogWrite(PIN_LED_TIMER, blink ? 255 : 0);
     return;
@@ -117,7 +119,7 @@ void updateGameLogic() {
     case STATE_JUGANDO: {
       unsigned long elapsed = now - gameStartTime;
 
-      #Verificación de expiración de tiempo (Derrota)
+      // Verificación de expiración de tiempo (Derrota)
       if (elapsed >= GAME_DURATION_MS) {
         currentState = STATE_DERROTA;
         animStep = 0;
@@ -125,19 +127,19 @@ void updateGameLogic() {
         break;
       }
 
-     #Cálculo atenuado del LED verde del tiempo (100% -> 0%)
+      // Cálculo atenuado del LED verde del tiempo (100% -> 0%)
       unsigned long remaining = GAME_DURATION_MS - elapsed;
       uint8_t timerPwm = (remaining * 255L) / GAME_DURATION_MS;
       analogWrite(PIN_LED_TIMER, timerPwm);
 
-      #Cálculo de distancias y niveles
+      // Cálculo de distancias y niveles
       uint8_t dx = calculateAxisDistance(posX, tx);
       uint8_t dy = calculateAxisDistance(posY, ty);
 
       levelX = getProximityLevel(dx);
       levelY = getProximityLevel(dy);
 
-     #Verificación de Condición de Victoria (Permanencia contínua de 2000 ms)
+      // Verificación de Condición de Victoria (Permanencia continua de 2000 ms)
       if (dx == 0 && dy == 0) {
         if (victoryStartTime == 0) {
           victoryStartTime = now;
@@ -147,25 +149,25 @@ void updateGameLogic() {
           animTimer = now;
         }
       } else {
-        victoryStartTime = 0; #Reiniciar si el jugador sale del área
+        victoryStartTime = 0; // Reiniciar si el jugador sale del área
       }
       break;
     }
 
     case STATE_VICTORIA:
-     #LED Verde fijo al 100%
+      // LED Verde fijo al 100%
       analogWrite(PIN_LED_TIMER, 255);
       if (now - animTimer >= 250) {
         animTimer = now;
         animStep++;
-        if (animStep >= 20) { #Duración de la animación en Esclavo
+        if (animStep >= 20) { // Duración de la animación en Esclavo
           currentState = STATE_INACTIVO;
         }
       }
       break;
 
     case STATE_DERROTA:
-      #LED Verde parpadea 10 veces (250 ms ON / 250 ms OFF)
+      // LED Verde parpadea 10 veces (250 ms ON / 250 ms OFF)
       if (now - animTimer >= 250) {
         animTimer = now;
         animStep++;
@@ -199,29 +201,10 @@ void loop() {
   readSerialData();
   updateGameLogic();
 
- #Envío periódico al Esclavo
+  // Envío periódico al Esclavo
   unsigned long now = millis();
   if (now - lastTxTime >= TX_INTERVAL_MS) {
     lastTxTime = now;
     sendStateAndLevels();
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
