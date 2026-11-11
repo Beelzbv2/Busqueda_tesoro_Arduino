@@ -1,18 +1,19 @@
 #include <SoftwareSerial.h>
 
-// Definición de Pines
+// ==========================================
+// DEFINICIÓN DE PINES Y CONSTANTES
+// ==========================================
 const uint8_t PIN_LED_TIMER  = 9;  // LED Verde PWM
-const uint8_t PIN_SOFT_RX    = 10;
-const uint8_t PIN_SOFT_TX    = 11;
-const uint8_t PIN_UNUSED_ADC = A5; // Pin analógico flotante para la semilla aleatoria
+const uint8_t PIN_SOFT_RX    = 10; // Conectar al TX del Esclavo (Pin 11)
+const uint8_t PIN_SOFT_TX    = 11; // Conectar al RX del Esclavo (Pin 10)
+const uint8_t PIN_UNUSED_ADC = A5; // Pin libre para generar la semilla aleatoria
 
-// Constantes del Juego
-const unsigned long GAME_DURATION_MS = 60000; // 60 segundos
-const unsigned long VICTORY_HOLD_MS   = 2000;  // 2 segundos de permanencia continua
-const unsigned long TX_INTERVAL_MS   = 40;
-const unsigned long TIMEOUT_MS       = 2000;
+const unsigned long GAME_DURATION_MS = 60000; // 60 segundos de juego
+const unsigned long VICTORY_HOLD_MS   = 2000;  // 2 segundos de permanencia contínua
+const unsigned long TX_INTERVAL_MS   = 40;    // Frecuencia de envío serial
+const unsigned long TIMEOUT_MS       = 2000;  // Timeout de conexión
 
-// Máquina de Estados del Maestro
+// Máquina de Estados del Juego
 enum State {
   STATE_INACTIVO,
   STATE_JUGANDO,
@@ -24,51 +25,66 @@ State currentState = STATE_INACTIVO;
 
 SoftwareSerial linkSerial(PIN_SOFT_RX, PIN_SOFT_TX);
 
-// Posición y Distancias del Tesoro
-uint8_t tx = 0, ty = 0; // Coordenadas de esquina del tesoro 2x2
+// Posición del Tesoro (2x2) y Lecturas del Jugador
+uint8_t tx = 0, ty = 0;
 uint8_t posX = 0, posY = 0;
 uint8_t levelX = 0, levelY = 0;
 
-// Temporizadores y Banderas
+// Temporizadores no bloqueantes
 unsigned long gameStartTime    = 0;
 unsigned long victoryStartTime = 0;
 unsigned long lastTxTime       = 0;
 unsigned long lastRxTime       = 0;
 unsigned long animTimer        = 0;
 uint8_t animStep               = 0;
+bool linkLost                  = false;
 
-bool linkLost = false;
-
-// Función para calcular distancia discreta a un tesoro 2x2 {tx-1, tx}
+// ==========================================
+// CÁLCULO DE DISTANCIAS Y NIVELES
+// ==========================================
+// Protección contra subflujo de entero si t < 1
 uint8_t calculateAxisDistance(uint8_t pos, uint8_t t) {
-  if (pos < (t - 1)) {
-    return (t - 1) - pos;
+  if (t < 1) return 100;
+  
+  uint8_t minCell = t - 1;
+  if (pos < minCell) {
+    return minCell - pos;
   } else if (pos > t) {
     return pos - t;
   } else {
-    return 0; // Dentro del tesoro
+    return 0; // Posicionado dentro del área del tesoro en este eje
   }
 }
 
-// Convertir distancia en Nivel de Proximidad (0 a 3)
 uint8_t getProximityLevel(uint8_t d) {
-  if (d == 0)      return 3; // AQUÍ
-  if (d <= 5)      return 2; // CALIENTE
-  if (d <= 10)     return 1; // TIBIO
-  return 0;                  // FRÍO (d > 10)
+  if (d == 0)  return 3; // AQUÍ (brillo 100%)
+  if (d <= 5)  return 2; // CALIENTE (brillo medio)
+  if (d <= 10) return 1; // TIBIO (brillo tenue)
+  return 0;              // FRÍO (apagado)
 }
 
 void startNewGame() {
-  // Semilla Aleatoria
   randomSeed(analogRead(PIN_UNUSED_ADC));
-  
-  // Coordenadas aleatorias
-  tx = random(12, 101);
+  tx = random(12, 101); // Coordenada entre 12 y 100 (garantiza FRÍO al iniciar en 0)
   ty = random(12, 101);
 
   gameStartTime = millis();
   victoryStartTime = 0;
   currentState = STATE_JUGANDO;
+}
+
+// ==========================================
+// COMUNICACIÓN SERIAL (LECTURA Y RESPUESTA)
+// ==========================================
+void sendStateAndLevels() {
+  uint8_t stateByte = 0xE0;
+  if (currentState == STATE_JUGANDO)  stateByte = 0xE1;
+  if (currentState == STATE_VICTORIA) stateByte = 0xE2;
+  if (currentState == STATE_DERROTA)  stateByte = 0xE3;
+
+  linkSerial.write(stateByte);
+  linkSerial.write(0x10 + levelX);
+  linkSerial.write(0x20 + levelY);
 }
 
 void processIncomingByte(uint8_t b) {
@@ -79,28 +95,28 @@ void processIncomingByte(uint8_t b) {
     posX = b;
   } else if (b >= 101 && b <= 201) {
     posY = b - 101;
-  } else if (b == 0xFE) {
-    if (currentState == STATE_INACTIVO) {
-      startNewGame();
-    }
+  } else if (b == 0xFE && currentState == STATE_INACTIVO) {
+    startNewGame();
   }
 }
 
 void readSerialData() {
   while (linkSerial.available() > 0) {
-    uint8_t b = linkSerial.read();
-    processIncomingByte(b);
+    processIncomingByte(linkSerial.read());
   }
 }
 
+// ==========================================
+// MÁQUINA DE ESTADOS Y LÓGICA DE JUEGO
+// ==========================================
 void updateGameLogic() {
   unsigned long now = millis();
 
-  // Control del Timeout de enlace
+  // Verificación del timeout de enlace (> 2000 ms)
   if (now - lastRxTime > TIMEOUT_MS) {
     if (!linkLost) {
       linkLost = true;
-      currentState = STATE_INACTIVO; // Abortar partida si se pierde la comunicación
+      currentState = STATE_INACTIVO; // Abortar partida por desconexión
     }
   }
 
@@ -119,7 +135,7 @@ void updateGameLogic() {
     case STATE_JUGANDO: {
       unsigned long elapsed = now - gameStartTime;
 
-      // Verificación de expiración de tiempo (Derrota)
+      // Verificación de expiración de tiempo de partida
       if (elapsed >= GAME_DURATION_MS) {
         currentState = STATE_DERROTA;
         animStep = 0;
@@ -127,9 +143,8 @@ void updateGameLogic() {
         break;
       }
 
-      // Cálculo atenuado del LED verde del tiempo (100% -> 0%)
-      unsigned long remaining = GAME_DURATION_MS - elapsed;
-      uint8_t timerPwm = (remaining * 255L) / GAME_DURATION_MS;
+      // Atenuación progresiva por PWM del LED Verde (100% a 0%)
+      uint8_t timerPwm = ((GAME_DURATION_MS - elapsed) * 255L) / GAME_DURATION_MS;
       analogWrite(PIN_LED_TIMER, timerPwm);
 
       // Cálculo de distancias y niveles
@@ -139,7 +154,7 @@ void updateGameLogic() {
       levelX = getProximityLevel(dx);
       levelY = getProximityLevel(dy);
 
-      // Verificación de Condición de Victoria (Permanencia continua de 2000 ms)
+      // Verificación de permanencia contínua durante 2000 ms para ganar
       if (dx == 0 && dy == 0) {
         if (victoryStartTime == 0) {
           victoryStartTime = now;
@@ -149,18 +164,17 @@ void updateGameLogic() {
           animTimer = now;
         }
       } else {
-        victoryStartTime = 0; // Reiniciar si el jugador sale del área
+        victoryStartTime = 0; // Reiniciar temporizador si se sale del área
       }
       break;
     }
 
     case STATE_VICTORIA:
-      // LED Verde fijo al 100%
+      // LED Verde encendido al 100% fijo durante la animación
       analogWrite(PIN_LED_TIMER, 255);
       if (now - animTimer >= 250) {
         animTimer = now;
-        animStep++;
-        if (animStep >= 20) { // Duración de la animación en Esclavo
+        if (++animStep >= 20) { // Esperar 10 parpadeos del Esclavo
           currentState = STATE_INACTIVO;
         }
       }
@@ -170,8 +184,7 @@ void updateGameLogic() {
       // LED Verde parpadea 10 veces (250 ms ON / 250 ms OFF)
       if (now - animTimer >= 250) {
         animTimer = now;
-        animStep++;
-        if (animStep >= 20) {
+        if (++animStep >= 20) {
           currentState = STATE_INACTIVO;
         }
       }
@@ -180,17 +193,9 @@ void updateGameLogic() {
   }
 }
 
-void sendStateAndLevels() {
-  uint8_t stateByte = 0xE0;
-  if (currentState == STATE_JUGANDO)  stateByte = 0xE1;
-  if (currentState == STATE_VICTORIA) stateByte = 0xE2;
-  if (currentState == STATE_DERROTA)  stateByte = 0xE3;
-
-  linkSerial.write(stateByte);
-  linkSerial.write(0x10 + levelX);
-  linkSerial.write(0x20 + levelY);
-}
-
+// ==========================================
+// SETUP & LOOP PRINCIPAL
+// ==========================================
 void setup() {
   pinMode(PIN_LED_TIMER, OUTPUT);
   linkSerial.begin(9600);
@@ -201,7 +206,7 @@ void loop() {
   readSerialData();
   updateGameLogic();
 
-  // Envío periódico al Esclavo
+  // Envío periódico de estado y niveles al Esclavo
   unsigned long now = millis();
   if (now - lastTxTime >= TX_INTERVAL_MS) {
     lastTxTime = now;
