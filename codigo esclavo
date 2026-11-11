@@ -1,5 +1,6 @@
 #include <SoftwareSerial.h>
-#Definición de Pines
+
+// Definición de Pines
 const uint8_t PIN_POT_X      = A0;
 const uint8_t PIN_POT_Y      = A1;
 const uint8_t PIN_BTN_START  = 2;
@@ -8,13 +9,13 @@ const uint8_t PIN_LED_Y      = 5; // PWM
 const uint8_t PIN_SOFT_RX    = 10;
 const uint8_t PIN_SOFT_TX    = 11;
 
-#Constantes de Configuración y PWM Referenciales
+// Constantes de Configuración y PWM Referenciales
 const uint8_t PWM_LEVELS[4]  = {0, 20, 80, 255}; // FRÍO, TIBIO, CALIENTE, AQUÍ
 const unsigned long TX_INTERVAL_MS = 40;
 const unsigned long TIMEOUT_MS     = 2000;
 const unsigned long DEBOUNCE_MS    = 40;
 
-#Códigos de Protocolo (Maestro -> Esclavo)
+// Códigos de Protocolo (Maestro -> Esclavo)
 const uint8_t CMD_STATE_INACTIVO = 0xE0;
 const uint8_t CMD_STATE_JUGANDO  = 0xE1;
 const uint8_t CMD_STATE_VICTORIA = 0xE2;
@@ -22,35 +23,35 @@ const uint8_t CMD_STATE_DERROTA  = 0xE3;
 
 SoftwareSerial linkSerial(PIN_SOFT_RX, PIN_SOFT_TX);
 
-#Variables de Estado Interno
+// Variables de Estado Interno
 uint8_t currentLevelX = 0;
 uint8_t currentLevelY = 0;
 uint8_t gameState     = CMD_STATE_INACTIVO;
 
-#Temporizadores no bloqueantes
+// Temporizadores no bloqueantes
 unsigned long lastTxTime    = 0;
 unsigned long lastRxTime    = 0;
 unsigned long lastDebounce  = 0;
 unsigned long animTimer     = 0;
 
-#Variables de Botón
+// Variables de Botón
 bool lastBtnState = HIGH;
 bool btnState     = HIGH;
 
-#Variables de Animación de Pérdida de Enlace y Victoria
+// Variables de Animación de Pérdida de Enlace y Victoria
 bool linkLost          = false;
 uint8_t animStep       = 0;
 bool isAnimatingEnd    = false;
 
 uint8_t readADCUniform(uint8_t pin) {
-  analogRead(pin);
+  analogRead(pin); // Estabilización del multiplexor ADC
   uint32_t sum = 0;
   for (uint8_t i = 0; i < 4; i++) {
     sum += analogRead(pin);
   }
   uint32_t avg = sum / 4;
   
-#Conversión uniforme a rango [0, 100]
+  // Conversión uniforme a rango [0, 100]
   uint32_t coord = (avg * 100L) / 1024L;
   if (coord > 100) coord = 100;
   return (uint8_t)coord;
@@ -108,7 +109,7 @@ void checkButton() {
 void updateOutputs() {
   unsigned long now = millis();
 
-#Verificar Timeout de enlace > 2000 ms
+  // Verificar Timeout de enlace > 2000 ms
   if (now - lastRxTime > TIMEOUT_MS) {
     linkLost = true;
   }
@@ -124,7 +125,7 @@ void updateOutputs() {
     return;
   }
 
-#Animación de Victoria
+  // Animación de Victoria
   if (gameState == CMD_STATE_VICTORIA && isAnimatingEnd) {
     if (now - animTimer >= 250) {
       animTimer = now;
@@ -139,7 +140,7 @@ void updateOutputs() {
     return;
   }
 
-#Comportamiento Normal durante JUGANDO o INACTIVO
+  // Comportamiento Normal durante JUGANDO o INACTIVO
   if (gameState == CMD_STATE_INACTIVO || gameState == CMD_STATE_DERROTA) {
     analogWrite(PIN_LED_X, 0);
     analogWrite(PIN_LED_Y, 0);
@@ -162,7 +163,7 @@ void loop() {
   readSerialData();
   checkButton();
 
-#Transmisión periódica de coordenadas (cada 40 ms)
+  // Transmisión periódica de coordenadas (cada 40 ms)
   unsigned long now = millis();
   if (now - lastTxTime >= TX_INTERVAL_MS) {
     lastTxTime = now;
